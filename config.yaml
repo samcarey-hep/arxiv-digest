@@ -1,0 +1,97 @@
+# ---------------------------------------------------------------------------
+# Personal arXiv digest: edit this file to tune what you see.
+# Changes take effect on the next scheduled run (or Actions -> Run workflow).
+# ---------------------------------------------------------------------------
+
+site_title: "Sam's arXiv Digest"
+categories: [hep-ph, hep-ex, nucl-th, hep-th]
+include_cross_lists: true        # e.g. astro-ph.HE papers cross-listed to hep-ph
+include_replacements: false      # revised versions (v2, v3, ...) of older papers
+
+ranking:
+  model: auto-haiku              # cheap model that scores every abstract
+  batch_size: 40
+  min_score: 4                   # papers below this go into the collapsed "everything else" list
+
+summaries:
+  model: auto-sonnet             # model that reads full text; "auto-opus" for deeper (pricier)
+  max_detailed: 12               # number of full summaries per day
+  min_score: 6                   # only summarize papers at least this relevant
+  full_text: true                # read the paper (arXiv HTML, else PDF) rather than only the abstract
+  max_fulltext_chars: 45000      # ~11k tokens per paper
+
+# Prose profile given to the model. The more specific, the better the ranking.
+interests: |
+  CORE (score highest):
+  - Neutrino-nucleus interactions across energies: quasielastic, 2p2h/meson-exchange currents,
+    resonance production, shallow- and deep-inelastic scattering, coherent pion production.
+  - Neutrino event generators and their physics models: Achilles, GENIE, NuWro, GiBUU, NEUT,
+    MARLEY; intranuclear cascades, final-state interactions, spectral functions, ab initio
+    (GFMC, coupled cluster) electroweak responses, factorization schemes, nuclear remnants and
+    de-excitation gammas/nucleons.
+  - Low-energy (MeV) neutrino physics on argon and other nuclei: CEvNS, supernova neutrinos,
+    DUNE low-energy program and supernova pointing, stopped-pion sources, nuclear de-excitation.
+  - Electron scattering as a constraint on neutrino cross sections (e4nu, inclusive (e,e')).
+  - Nucleon axial and vector form factors, z-expansion, lattice QCD inputs to neutrino physics.
+
+  HIGH:
+  - BSM physics at neutrino experiments: neutrino tridents, upscattering, dipole portals, heavy
+    neutral leptons, dark photons/scalars, light mediators; DUNE ND, SBN (SBND, MicroBooNE,
+    ICARUS), MiniBooNE/LSND anomalies, FASER/FASERnu/FPF, SHiP, muon-collider neutrinos.
+  - Parton showers, QCD resummation or hadronization applied to neutrino or lepton-nucleus
+    scattering; eikonal/Glauber approximations.
+  - Oscillation-analysis systematics driven by interaction modelling (DUNE, Hyper-K, T2K, NOvA).
+  - Quantum entanglement, spin correlations and quantum tomography in scattering final states.
+
+  MEDIUM:
+  - Precision atomic physics probes of new physics (isotope shifts, King plot non-linearity).
+  - Nuclear structure relevant to the above (argon, carbon, oxygen), short-range correlations.
+  - ML/AI and LLM agents for theoretical or phenomenological physics workflows.
+  - General neutrino phenomenology (mass models, oscillations, cosmology) only when the idea is
+    novel or the result is strong.
+
+  LOW: string theory, holography, formal QFT, flavour model-building and collider BSM without a
+  neutrino-interaction angle.
+
+favorite_authors:                # papers by these people get a boost
+  - Isaacson
+  - Pandey
+  - Benhar
+  - Tammaro
+  - Borrello
+  - Gil Paz
+  - Lovato
+  - Rocco
+  - Gardiner
+favorite_author_boost: 1.5
+
+# Used only as a fallback when the API is unavailable (and in --dry-run).
+keywords:
+  neutrino-nucleus: 4
+  neutrino-nucleon: 3
+  event generator: 3
+  achilles: 5
+  genie: 3
+  nuwro: 3
+  gibuu: 3
+  marley: 5
+  cevns: 4
+  coherent elastic neutrino: 4
+  supernova neutrino: 3
+  argon: 2
+  dune: 2
+  microboone: 2
+  miniboone: 2
+  sbnd: 2
+  faser: 2
+  trident: 4
+  upscattering: 3
+  heavy neutral lepton: 2
+  quasielastic: 3
+  axial form factor: 3
+  z-expansion: 3
+  spectral function: 2
+  final-state interaction: 2
+  cross section: 1
+  neutrino: 1
+  entanglement: 1
