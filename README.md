@@ -5,11 +5,11 @@ Action:
 
 1. reads **today's announcement** from arXiv's RSS feed (only new papers and cross-lists, never
    the previous day's papers);
-2. has a fast model (Haiku) score every abstract 0–10 against the interest profile in
-   `config.yaml`;
-3. has a stronger model (Sonnet) **read the full text** of the top ~12 papers (arXiv HTML, falling
-   back to the PDF) and write a summary covering the novel idea, the method, the key results, why
-   it matters to you, and caveats;
+2. has Google's Gemini Flash-Lite (free tier) score every abstract 0–10 against the interest
+   profile in `config.yaml`;
+3. has Gemini Flash **read the full text** of the top ~10 papers (arXiv HTML, falling back to the
+   PDF) and write a summary covering the novel idea, the method, the key results, why it matters
+   to you, and caveats;
 4. publishes a static site on GitHub Pages, with an archive, search and saved papers, and can
    optionally email you the digest.
 
@@ -25,8 +25,9 @@ Action:
    git remote add origin https://github.com/<you>/arxiv-digest.git
    git push -u origin main
    ```
-2. **Add the API key.** Go to Settings → Secrets and variables → Actions → New repository secret,
-   and add `ANTHROPIC_API_KEY`. You can create a key at console.anthropic.com.
+2. **Add a free Gemini API key.** Go to aistudio.google.com, sign in with a Google account, and
+   click **Get API key → Create API key** (no card needed). Then, in the repo, go to Settings →
+   Secrets and variables → Actions → New repository secret, and add it as `GEMINI_API_KEY`.
 3. **Turn on Pages.** Go to Settings → Pages → Build and deployment, choose *Deploy from a
    branch*, and pick branch `main` with folder `/docs`.
 4. **Allow the workflow to push.** Go to Settings → Actions → General → Workflow permissions and
@@ -55,21 +56,26 @@ Everything is in `config.yaml`:
 - `interests` is a prose profile, the most important knob. Be specific.
 - `favorite_authors` get a score boost.
 - `summaries.max_detailed` and `summaries.min_score` set how many full summaries you get.
-- `summaries.model` can be set to `auto-opus` for deeper reading at roughly five times the cost.
-  `auto-*` always picks the newest model in that family. You can also give an exact model id.
+- `auto-flash` / `auto-flash-lite` always pick the newest Gemini model of that family that works
+  on the free tier. You can also give an exact model id.
 
 ## Cost
 
-There are about 190 new papers per day. Ranking them costs about $0.10. Full-text summaries of
-12 papers at roughly 12k tokens each cost about $0.50–0.60 with Sonnet. That comes to roughly
-**$10–14 a month** for 22 announcement days. To spend less, lower `max_detailed` or set
-`full_text: false` (abstract-based summaries cost about $2–3 a month in total).
+**Free.** A day's digest uses only about 4–5 requests (ranking abstracts in batches of 60,
+summarizing 5 papers per request), well within the Gemini free tier. If the free quota ever
+runs out, that day falls back to keyword ranking without summaries, and the next day recovers.
+On the free tier Google may use the prompts to improve its products; everything sent is
+public arXiv text.
+
+To use Claude instead (paid, roughly $10–14 a month with Sonnet or $2–3 with Haiku), set
+`provider: anthropic` and the models `auto-haiku` / `auto-sonnet` in `config.yaml`, and add an
+`ANTHROPIC_API_KEY` secret.
 
 ## Local use
 
 ```bash
 pip install -r requirements.txt
 python run.py --dry-run          # no API key: keyword ranking, preview the site in docs/
-ANTHROPIC_API_KEY=... python run.py
+GEMINI_API_KEY=... python run.py
 python -m pytest -q tests        # offline tests (feed parsing, text extraction, full pipeline)
 ```

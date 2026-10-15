@@ -8,17 +8,28 @@ categories: [hep-ph, hep-ex, nucl-th, hep-th]
 include_cross_lists: true        # e.g. astro-ph.HE papers cross-listed to hep-ph
 include_replacements: false      # revised versions (v2, v3, ...) of older papers
 
+# Which AI service to use:
+#   gemini    -> Google Gemini API free tier (default). Needs repo secret GEMINI_API_KEY
+#                from aistudio.google.com (free, no card). Note: on the free tier Google may
+#                use prompts to improve its products; everything sent here is public arXiv text.
+#   anthropic -> Claude (paid). Needs ANTHROPIC_API_KEY; use models auto-haiku / auto-sonnet.
+provider: gemini
+
+gemini:
+  seconds_between_calls: 8       # stay under the free tier's requests-per-minute limit
+
 ranking:
-  model: auto-haiku              # cheap model that scores every abstract
-  batch_size: 40
+  model: auto-flash-lite         # scores every abstract (newest free Flash-Lite model)
+  batch_size: 60                 # abstracts per request (fewer requests = safer on free tier)
   min_score: 4                   # papers below this go into the collapsed "everything else" list
 
 summaries:
-  model: auto-sonnet             # model that reads full text; "auto-opus" for deeper (pricier)
-  max_detailed: 12               # number of full summaries per day
+  model: auto-flash              # reads the full text of the top papers
+  max_detailed: 10               # number of full summaries per day
   min_score: 6                   # only summarize papers at least this relevant
+  papers_per_call: 5             # summarize several papers per request (free-tier friendly)
   full_text: true                # read the paper (arXiv HTML, else PDF) rather than only the abstract
-  max_fulltext_chars: 45000      # ~11k tokens per paper
+  max_fulltext_chars: 40000      # ~11k tokens per paper
 
 # Prose profile given to the model. The more specific, the better the ranking.
 interests: |

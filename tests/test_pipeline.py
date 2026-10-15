@@ -44,31 +44,37 @@ def test_fulltext_extraction():
         assert junk not in text, junk
 
 
-class FakeMessages:
-    def __init__(self):
-        self.calls = []
+def make_fake_gemini_req(calls):
+    """Stand-in for GeminiBackend._req: model listing + generateContent with a quota error."""
+    import io
+    import re
+    import urllib.error
 
-    def create(self, model, max_tokens, system, tools, tool_choice, messages):
-        self.calls.append(model)
-        name = tools[0]["name"]
-        user = messages[0]["content"]
-        if name == "record_scores":
-            import re
+    def _req(self, method, path, body=None, timeout=300):
+        calls.append(path)
+        if path.startswith("models?"):
+            names = ["gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.8-flash-tts",
+                     "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-latest"]
+            return {"models": [{"name": "models/" + n, "supportedGenerationMethods": ["generateContent"]} for n in names]}
+        model = path.split("/")[1].split(":")[0]
+        if model == "gemini-3.8-flash":   # newest Flash not on free tier -> must fall back
+            raise urllib.error.HTTPError(path, 429, "quota", {}, io.BytesIO(
+                b'{"error":{"message":"Quota exceeded for metric generate_content_free_tier_requests, limit: 0"}}'))
+        schema = body["generationConfig"]["responseJsonSchema"]
+        assert schema["type"] == "object"
+        user = body["contents"][0]["parts"][0]["text"]
+        if "scores" in schema["properties"]:
             ids = re.findall(r"^\[(\S+)\]", user, re.M)
             data = {"scores": [{"id": i, "score": 9 if "99999" in i or "16836" in i else 6 if "17263" in i else 2,
                                 "topic": "test topic", "reason": f"reason for {i}"} for i in ids]}
         else:
-            data = {"tldr": "TLDR", "novel_idea": "NOVEL", "method": "METHOD", "key_results": ["R1", "R2"],
-                    "why_it_matters": "WHY", "caveats": "CAV", "read_priority": "must-read"}
-        return SimpleNamespace(content=[SimpleNamespace(type="tool_use", input=data)],
-                               usage=SimpleNamespace(input_tokens=100, output_tokens=10))
-
-
-class FakeClient:
-    def __init__(self):
-        self.messages = FakeMessages()
-        self.models = SimpleNamespace(list=lambda limit=100: SimpleNamespace(
-            data=[SimpleNamespace(id="claude-opus-9"), SimpleNamespace(id="claude-sonnet-9"), SimpleNamespace(id="claude-haiku-9")]))
+            ids = re.findall(r'<paper id="(\S+)">', user)
+            data = {"summaries": [{"id": i, "tldr": "TLDR", "novel_idea": "NOVEL", "method": "METHOD",
+                                   "key_results": ["R1", "R2"], "why_it_matters": "WHY", "caveats": "CAV",
+                                   "read_priority": "must-read"} for i in ids]}
+        return {"candidates": [{"content": {"parts": [{"text": "```json\n" + json.dumps(data) + "\n```"}]}}],
+                "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 10}}
+    return _req
 
 
 def test_full_run_with_fake_api(monkeypatch=None):
@@ -81,15 +87,19 @@ def test_full_run_with_fake_api(monkeypatch=None):
     import importlib
     import run as runmod
     importlib.reload(runmod)
-    fake = FakeClient()
-    runmod.llm.get_client = lambda: fake
+    calls = []
+    runmod.llm.GeminiBackend._req = make_fake_gemini_req(calls)
+    runmod.llm.time.sleep = lambda s: None
     runmod.arxiv_feed.fetch_fulltext = lambda pid, budget=0: ("FULL TEXT", "fulltext-html")
     import os
-    os.environ["ANTHROPIC_API_KEY"] = "test"
+    os.environ["GEMINI_API_KEY"] = "test"
     sys.argv = ["run.py", "--feed-file", str(FX / "feed_2026-10-14.xml"), "--no-email"]
     assert runmod.main() == 0
     rec = json.loads((tmp / "docs/data/2026-10-14.json").read_text())
-    assert rec["models"] == {"rank": "claude-haiku-9", "summary": "claude-sonnet-9"}
+    assert rec["models"] == {"rank": "gemini-3.5-flash-lite", "summary": "gemini-3.6-flash"}, rec["models"]
+    gen = [c for c in calls if ":generateContent" in c]
+    assert gen.count("models/gemini-3.8-flash:generateContent") == 1   # tried once, then skipped
+    assert len(gen) == 3   # 1 ranking batch + 1 failed + 1 batched summary call
     ids = [p["id"] for p in rec["papers"]]
     assert "2505.08871" not in ids                       # replacement excluded
     assert "2610.16496" in ids                           # cross-list included
@@ -100,12 +110,12 @@ def test_full_run_with_fake_api(monkeypatch=None):
     assert "NOVEL" in html and "Why it matters to you" in html and "Wed 14 Oct 2026" in html
     assert (tmp / "docs/days/2026-10-14.html").exists() and (tmp / "docs/archive.html").exists()
     # second run is a no-op (this is what prevents stale/duplicate days)
-    n = len(fake.messages.calls)
-    assert runmod.main() == 0 and len(fake.messages.calls) == n
+    n = len(calls)
+    assert runmod.main() == 0 and len(calls) == n
     # empty feed (weekend) is a no-op
     sys.argv = ["run.py", "--feed-file", str(FX / "feed_empty.xml"), "--no-email"]
     assert runmod.main() == 0
-    os.environ.pop("ANTHROPIC_API_KEY")
+    os.environ.pop("GEMINI_API_KEY")
     sys.path.remove(str(tmp))
     shutil.rmtree(tmp)
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Daily arXiv digest: fetch -> rank -> summarize -> build site (-> email).
 
-  python run.py                 # normal daily run (needs ANTHROPIC_API_KEY)
+  python run.py                 # normal daily run (needs GEMINI_API_KEY, or ANTHROPIC_API_KEY)
   python run.py --dry-run       # no API calls: keyword ranking + abstract snippets
   python run.py --feed-file f   # use a saved RSS file instead of downloading
   python run.py --force         # redo today's digest even if it already exists
@@ -79,20 +79,24 @@ def main() -> int:
     # 2. rank -------------------------------------------------------------
     usage = {}
     models = {}
-    client = None
-    if args.dry_run or not os.environ.get("ANTHROPIC_API_KEY"):
+    rank_call = sum_call = None
+    if args.dry_run or not llm.api_key_present(cfg):
         if not args.dry_run:
-            log("ANTHROPIC_API_KEY not set -> dry run")
+            log("No API key set (GEMINI_API_KEY / ANTHROPIC_API_KEY) -> dry run")
             args.dry_run = True
         for p in papers:
             p.score = llm.keyword_score(p, cfg)
             p.reason = "(dry run: keyword-ranked)"
     else:
-        client = llm.get_client()
-        models["rank"] = llm.resolve_model(client, cfg["ranking"]["model"])
-        models["summary"] = llm.resolve_model(client, cfg["summaries"]["model"])
-        log(f"Models: {models}")
-        usage["rank"] = llm.rank(client, models["rank"], cfg, papers, cfg["ranking"].get("batch_size", 40))
+        backend = llm.get_backend(cfg)
+        rank_c = backend.resolve(cfg["ranking"]["model"])
+        sum_c = backend.resolve(cfg["summaries"]["model"])
+        log(f"Model candidates: rank={rank_c} summary={sum_c}")
+        rank_call = llm.Caller(backend, rank_c)
+        # if the summary model runs out of free quota, fall back to the ranking model
+        sum_call = llm.Caller(backend, sum_c + [m for m in rank_c if m not in sum_c])
+        usage["rank"] = llm.rank(rank_call, cfg, papers, cfg["ranking"].get("batch_size", 40))
+        models["rank"] = rank_call.used or "keywords"
     llm.apply_boosts(papers, cfg)
     papers.sort(key=lambda p: -p.score)
 
@@ -100,27 +104,45 @@ def main() -> int:
     scfg = cfg["summaries"]
     top = [p for p in papers if p.score >= scfg.get("min_score", 6)][: scfg.get("max_detailed", 12)]
     log(f"Summarizing {len(top)} papers")
-
-    def work(p):
-        if args.dry_run:
-            return p, llm.abstract_only_summary(p), "abstract", None
-        text, src = ("", "abstract")
-        if scfg.get("full_text", True):
-            text, src = arxiv_feed.fetch_fulltext(p.id, scfg.get("max_fulltext_chars", 45000))
-        try:
-            s, u = llm.summarize(client, models["summary"], cfg, p, text)
-            return p, s, src, u
-        except Exception as e:  # noqa: BLE001
-            log(f"[summary] {p.id} failed: {e}")
-            return p, {}, src, None
-
     su = {"input": 0, "output": 0}
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        for p, s, src, u in ex.map(work, top):
-            p.summary, p.summary_source = s, src
-            if u:
-                su["input"] += u.input_tokens; su["output"] += u.output_tokens
+    if args.dry_run:
+        for p in top:
+            p.summary, p.summary_source = llm.abstract_only_summary(p), "abstract"
+    else:
+        def get_text(p):
+            if scfg.get("full_text", True):
+                return arxiv_feed.fetch_fulltext(p.id, scfg.get("max_fulltext_chars", 45000))
+            return "", "abstract"
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            texts = list(ex.map(get_text, top))
+        for p, (_, src) in zip(top, texts):
+            p.summary_source = src
+        per = max(1, int(scfg.get("papers_per_call", 5 if cfg.get("provider", "gemini") == "gemini" else 1)))
+        items = list(zip(top, [t for t, _ in texts]))
+        quota_gone = False
+        for i in range(0, len(items), per):
+            chunk = items[i:i + per]
+            if quota_gone:
+                break
+            try:
+                if per == 1:
+                    s1, u = llm.summarize(sum_call, cfg, chunk[0][0], chunk[0][1])
+                    res = {chunk[0][0].id: s1}
+                else:
+                    res, u = llm.summarize_many(sum_call, cfg, chunk)
+                su["input"] += u[0]; su["output"] += u[1]
+                for p, _ in chunk:
+                    p.summary = res.get(p.id, {})
+                    if not p.summary:
+                        log(f"[summary] model returned nothing for {p.id}")
+            except llm.QuotaExhausted as e:
+                log(f"[summary] free quota exhausted: {e}")
+                quota_gone = True
+            except Exception as e:  # noqa: BLE001
+                log(f"[summary] batch starting {chunk[0][0].id} failed: {e}")
+        models["summary"] = sum_call.used or "none"
     usage["summary"] = su
+    top = [p for p in top if p.summary]
 
     # 4. save + build ------------------------------------------------------
     record = {

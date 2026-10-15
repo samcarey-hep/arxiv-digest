@@ -1,10 +1,15 @@
-"""Ranking and summarization with the Anthropic API.
+"""Ranking and summarization with an LLM.
 
-- Ranking: a small/fast model scores every abstract 0-10 against your interest profile.
-- Summaries: a stronger model reads the paper's full text (intro, conclusions, and the
-  start of each section) and writes a structured summary.
-Model ids in config.yaml can be explicit ("claude-sonnet-4-5") or "auto-haiku" /
-"auto-sonnet" / "auto-opus", which pick the newest available model of that family.
+Two backends, chosen by `provider` in config.yaml:
+  - gemini    (default): Google Gemini API free tier. Key from aistudio.google.com, no card.
+  - anthropic          : Claude via the Anthropic API (paid, prepaid credit).
+Both are called through `Backend.call(system, user, tool, max_tokens)`, which returns
+(json_dict, (input_tokens, output_tokens)).
+
+Model names may be explicit ("gemini-3.6-flash", "claude-sonnet-4-5") or "auto-<family>":
+auto-flash / auto-flash-lite for Gemini, auto-haiku / auto-sonnet / auto-opus for Claude,
+which pick the newest available model of that family (falling back to older ones if the
+newest isn't on the free tier).
 """
 from __future__ import annotations
 
@@ -12,57 +17,218 @@ import json
 import os
 import re
 import sys
+import time
+import urllib.error
+import urllib.request
 
 from .arxiv_feed import Paper
-
-FALLBACK_MODELS = {"haiku": "claude-haiku-4-5", "sonnet": "claude-sonnet-4-5", "opus": "claude-opus-4-1"}
 
 
 def log(*a):
     print(*a, file=sys.stderr, flush=True)
 
 
-def get_client():
-    import anthropic
-    return anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5, timeout=300)
+class QuotaExhausted(RuntimeError):
+    """Daily free quota used up: stop calling the API for this run."""
 
 
-def resolve_model(client, name: str) -> str:
-    if not name.startswith("auto-"):
-        return name
-    family = name.split("-", 1)[1]
-    try:
-        ids = [m.id for m in client.models.list(limit=100).data]   # newest first
-        for mid in ids:
-            if family in mid:
-                return mid
-    except Exception as e:  # noqa: BLE001
-        log(f"[models] list failed ({e}); using fallback")
-    return FALLBACK_MODELS[family]
+# ============================================================ Anthropic backend
+
+class AnthropicBackend:
+    FALLBACK = {"haiku": "claude-haiku-4-5", "sonnet": "claude-sonnet-4-5", "opus": "claude-opus-4-1"}
+    parallel = 4
+
+    def __init__(self, cfg):
+        import anthropic
+        self.client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5, timeout=300)
+
+    def resolve(self, name: str) -> list[str]:
+        if not name.startswith("auto-"):
+            return [name]
+        fam = name.split("-", 1)[1]
+        try:
+            ids = [m.id for m in self.client.models.list(limit=100).data if fam in m.id]   # newest first
+            if ids:
+                return ids[:3]
+        except Exception as e:  # noqa: BLE001
+            log(f"[models] list failed ({e}); using fallback")
+        return [self.FALLBACK[fam]]
+
+    def call(self, model, system, user, tool, max_tokens):
+        resp = self.client.messages.create(
+            model=model, max_tokens=max_tokens,
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            tools=[tool], tool_choice={"type": "tool", "name": tool["name"]},
+            messages=[{"role": "user", "content": user}],
+        )
+        for b in resp.content:
+            if b.type == "tool_use":
+                return b.input, (resp.usage.input_tokens, resp.usage.output_tokens)
+        raise RuntimeError("model did not call the tool")
 
 
-def _system(cfg: dict) -> list[dict]:
+# =============================================================== Gemini backend
+
+def _gemini_schema(js: dict) -> dict:
+    """JSON schema -> Gemini responseSchema (OpenAPI subset, upper-case types)."""
+    out = {"type": js["type"].upper()}
+    for k in ("description", "enum"):
+        if k in js:
+            out[k] = js[k]
+    if "items" in js:
+        out["items"] = _gemini_schema(js["items"])
+    if "properties" in js:
+        out["properties"] = {k: _gemini_schema(v) for k, v in js["properties"].items()}
+        out["propertyOrdering"] = list(js["properties"])
+        out["required"] = js.get("required", list(js["properties"]))
+    return out
+
+
+def _version(name: str) -> float:
+    m = re.search(r"gemini-(\d+(?:\.\d+)?)", name)
+    return float(m.group(1)) if m else 0.0
+
+
+class GeminiBackend:
+    BASE = "https://generativelanguage.googleapis.com/v1beta"
+    FALLBACK = {"flash": ["gemini-flash-latest", "gemini-2.5-flash"],
+                "flash-lite": ["gemini-flash-lite-latest", "gemini-2.5-flash-lite"],
+                "pro": ["gemini-2.5-pro"]}
+    parallel = 1   # free tier has low requests-per-minute
+
+    def __init__(self, cfg):
+        self.key = os.environ["GEMINI_API_KEY"]
+        self.min_gap = float(cfg.get("gemini", {}).get("seconds_between_calls", 8))
+        self._last = 0.0
+        self.dead: set[str] = set()   # models with no free quota left today
+
+    def _req(self, method, path, body=None, timeout=300):
+        req = urllib.request.Request(f"{self.BASE}/{path}", method=method,
+                                     data=json.dumps(body).encode() if body is not None else None,
+                                     headers={"x-goog-api-key": self.key, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+
+    def resolve(self, name: str) -> list[str]:
+        """Return candidate model ids, best first."""
+        if not name.startswith("auto-"):
+            return [name]
+        fam = name.split("-", 1)[1]                      # flash | flash-lite | pro
+        pat = re.compile(rf"^gemini-\d+(?:\.\d+)?-{re.escape(fam)}$")
+        try:
+            names, token = [], ""
+            while True:
+                d = self._req("GET", "models?pageSize=1000" + (f"&pageToken={token}" if token else ""), timeout=60)
+                names += [m["name"].split("/", 1)[1] for m in d.get("models", [])
+                          if "generateContent" in m.get("supportedGenerationMethods", [])]
+                token = d.get("nextPageToken")
+                if not token:
+                    break
+            cands = sorted({n for n in names if pat.match(n)}, key=_version, reverse=True)
+            alias = [a for a in self.FALLBACK[fam] if a in names]
+            if cands or alias:
+                return cands[:3] + alias
+        except Exception as e:  # noqa: BLE001
+            log(f"[models] list failed ({e}); using fallback")
+        return self.FALLBACK[fam]
+
+    def call(self, model, system, user, tool, max_tokens):
+        if model in self.dead:
+            raise QuotaExhausted(model)
+        body = {
+            "systemInstruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": [{"text": user}]}],
+            "generationConfig": {"responseMimeType": "application/json",
+                                 "responseJsonSchema": tool["input_schema"],     # standard JSON Schema
+                                 "maxOutputTokens": max(max_tokens, 16384), "temperature": 0.3},
+        }
+        legacy_schema = False
+        for attempt in range(5):
+            wait = self.min_gap - (time.time() - self._last)
+            if wait > 0:
+                time.sleep(wait)
+            self._last = time.time()
+            try:
+                d = self._req("POST", f"models/{model}:generateContent", body)
+                break
+            except urllib.error.HTTPError as e:
+                msg = e.read().decode("utf-8", "replace")
+                if e.code == 429:
+                    if re.search(r"PerDay|per day|limit: 0", msg, re.I):
+                        self.dead.add(model)
+                        raise QuotaExhausted(f"{model}: {msg[:300]}")
+                    m = re.search(r'"retryDelay":\s*"(\d+)', msg)
+                    delay = int(m.group(1)) + 2 if m else 30 * (attempt + 1)
+                    log(f"[gemini] rate limited; sleeping {delay}s")
+                    time.sleep(delay)
+                    continue
+                if e.code == 400 and not legacy_schema and "schema" in msg.lower():
+                    # older API surface: fall back to the OpenAPI-style responseSchema field
+                    gc = body["generationConfig"]
+                    gc["responseSchema"] = _gemini_schema(gc.pop("responseJsonSchema"))
+                    legacy_schema = True
+                    continue
+                if e.code in (500, 502, 503, 504):
+                    time.sleep(15 * (attempt + 1))
+                    continue
+                if e.code in (403, 404):
+                    self.dead.add(model)
+                raise RuntimeError(f"Gemini HTTP {e.code} for {model}: {msg[:400]}")
+        else:
+            raise RuntimeError(f"Gemini: gave up after retries ({model})")
+        cand = (d.get("candidates") or [{}])[0]
+        text = "".join(p.get("text", "") for p in cand.get("content", {}).get("parts", []) if not p.get("thought"))
+        if not text:
+            raise RuntimeError(f"Gemini returned no text (finishReason={cand.get('finishReason')})")
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
+        um = d.get("usageMetadata", {})
+        return json.loads(text), (um.get("promptTokenCount", 0),
+                                  um.get("candidatesTokenCount", 0) + um.get("thoughtsTokenCount", 0))
+
+
+# ================================================================== dispatch
+
+def get_backend(cfg):
+    prov = cfg.get("provider", "gemini")
+    return GeminiBackend(cfg) if prov == "gemini" else AnthropicBackend(cfg)
+
+
+def api_key_present(cfg) -> bool:
+    return bool(os.environ.get("GEMINI_API_KEY" if cfg.get("provider", "gemini") == "gemini" else "ANTHROPIC_API_KEY"))
+
+
+class Caller:
+    """Calls the first working model from a candidate list; remembers the winner."""
+
+    def __init__(self, backend, candidates: list[str]):
+        self.b, self.cands, self.used = backend, list(candidates), None
+
+    def __call__(self, system, user, tool, max_tokens):
+        last = None
+        for m in list(self.cands):
+            try:
+                out = self.b.call(m, system, user, tool, max_tokens)
+                self.used = m
+                return out
+            except (QuotaExhausted, RuntimeError) as e:
+                last = e
+                log(f"[llm] {m} failed: {str(e)[:200]}")
+                if isinstance(e, QuotaExhausted) or m in getattr(self.b, "dead", set()):
+                    self.cands.remove(m)
+                    continue
+                raise
+        raise QuotaExhausted(f"no usable model left: {last}")
+
+
+def _system(cfg: dict) -> str:
     authors = ", ".join(cfg.get("favorite_authors", []))
-    text = (
+    return (
         "You are a research assistant for a theoretical neutrino physicist. "
         "Their interest profile follows.\n\n<interests>\n" + cfg["interests"].strip() +
         "\n</interests>\n\n<favorite_authors>" + authors + "</favorite_authors>\n\n"
         "Be concrete and technically precise; the reader has a physics PhD. "
         "Use LaTeX in $...$ for math. Never invent results that are not in the provided text."
     )
-    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
-
-
-def _tool_call(client, model, system, user, tool, max_tokens):
-    resp = client.messages.create(
-        model=model, max_tokens=max_tokens, system=system,
-        tools=[tool], tool_choice={"type": "tool", "name": tool["name"]},
-        messages=[{"role": "user", "content": user}],
-    )
-    for b in resp.content:
-        if b.type == "tool_use":
-            return b.input, resp.usage
-    raise RuntimeError("model did not call the tool")
 
 
 # ------------------------------------------------------------------ ranking
@@ -99,9 +265,10 @@ areas deserve the top of the scale; routine model-building with a passing mentio
 neutrinos does not. Return a score for every paper id given."""
 
 
-def rank(client, model: str, cfg: dict, papers: list[Paper], batch_size: int = 40) -> dict:
+def rank(call: Caller, cfg: dict, papers: list[Paper], batch_size: int = 40) -> dict:
     usage = {"input": 0, "output": 0}
     system = _system(cfg)
+    quota_gone = False
     for i in range(0, len(papers), batch_size):
         batch = papers[i:i + batch_size]
         listing = "\n\n".join(
@@ -109,14 +276,17 @@ def rank(client, model: str, cfg: dict, papers: list[Paper], batch_size: int = 4
             f"{' et al.' if len(p.authors) > 12 else ''}\nAbstract: {p.abstract[:1500]}"
             for p in batch
         )
-        try:
-            out, u = _tool_call(client, model, system, RANK_RUBRIC + "\n\n<papers>\n" + listing + "\n</papers>",
-                                RANK_TOOL, max_tokens=8000)
-            usage["input"] += u.input_tokens; usage["output"] += u.output_tokens
-            by_id = {s["id"].strip().strip("[]"): s for s in out.get("scores", [])}
-        except Exception as e:  # noqa: BLE001
-            log(f"[rank] batch {i} failed: {e}; falling back to keywords")
-            by_id = {}
+        by_id = {}
+        if not quota_gone:
+            try:
+                out, u = call(system, RANK_RUBRIC + "\n\n<papers>\n" + listing + "\n</papers>", RANK_TOOL, 8000)
+                usage["input"] += u[0]; usage["output"] += u[1]
+                by_id = {str(s["id"]).strip().strip("[]").replace("arXiv:", ""): s for s in out.get("scores", [])}
+            except QuotaExhausted as e:
+                log(f"[rank] quota exhausted ({e}); keyword ranking for the rest")
+                quota_gone = True
+            except Exception as e:  # noqa: BLE001
+                log(f"[rank] batch {i} failed: {e}; falling back to keywords")
         for p in batch:
             s = by_id.get(p.id)
             if s:
@@ -167,14 +337,45 @@ SUM_TOOL = {
 }
 
 
-def summarize(client, model: str, cfg: dict, p: Paper, fulltext: str) -> tuple[dict, object]:
+SUMS_TOOL = {
+    "name": "record_summaries",
+    "description": "Record one structured summary per paper.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"summaries": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"id": {"type": "string", "description": "arXiv id exactly as given"},
+                           **SUM_TOOL["input_schema"]["properties"]},
+            "required": ["id"] + SUM_TOOL["input_schema"]["required"]}}},
+        "required": ["summaries"],
+    },
+}
+
+
+def _paper_block(p: Paper, fulltext: str) -> str:
     body = fulltext if fulltext else "(Full text unavailable; summarize from the abstract only and say so in caveats.)"
-    user = (
-        f"Summarize this arXiv paper for the reader.\n\narXiv:{p.id} [{', '.join(p.categories)}]\n"
-        f"Title: {p.title}\nAuthors: {', '.join(p.authors[:20])}{' et al.' if len(p.authors) > 20 else ''}\n\n"
-        f"Abstract: {p.abstract}\n\n<paper_text>\n{body}\n</paper_text>"
-    )
-    return _tool_call(client, model, _system(cfg), user, SUM_TOOL, max_tokens=2000)
+    return (f"<paper id=\"{p.id}\">\narXiv:{p.id} [{', '.join(p.categories)}]\nTitle: {p.title}\n"
+            f"Authors: {', '.join(p.authors[:20])}{' et al.' if len(p.authors) > 20 else ''}\n\n"
+            f"Abstract: {p.abstract}\n\n<paper_text>\n{body}\n</paper_text>\n</paper>")
+
+
+def summarize(call: Caller, cfg: dict, p: Paper, fulltext: str):
+    """One paper per request."""
+    return call(_system(cfg), "Summarize this arXiv paper for the reader.\n\n" + _paper_block(p, fulltext),
+                SUM_TOOL, 2000)
+
+
+def summarize_many(call: Caller, cfg: dict, items: list[tuple[Paper, str]]):
+    """Several papers in one request (keeps free-tier request counts low).
+    Returns ({id: summary}, usage)."""
+    user = (f"Summarize each of these {len(items)} arXiv papers separately for the reader. "
+            "Return one entry per paper, using its id.\n\n" + "\n\n".join(_paper_block(p, t) for p, t in items))
+    out, u = call(_system(cfg), user, SUMS_TOOL, 4000 * len(items))
+    res = {}
+    for s in out.get("summaries", []):
+        sid = str(s.pop("id", "")).replace("arXiv:", "").strip()
+        res[sid] = s
+    return res, u
 
 
 def abstract_only_summary(p: Paper) -> dict:
