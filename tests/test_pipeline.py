@@ -67,6 +67,9 @@ def make_fake_gemini_req(calls):
             ids = re.findall(r"^\[(\S+)\]", user, re.M)
             data = {"scores": [{"id": i, "score": 9 if "99999" in i or "16836" in i else 6 if "17263" in i else 2,
                                 "topic": "test topic", "reason": f"reason for {i}"} for i in ids]}
+        elif "summaries" not in schema["properties"]:
+            data = {"tldr": "TLDR", "novel_idea": "NOVEL", "method": "METHOD", "key_results": ["R1"],
+                    "why_it_matters": "WHY", "caveats": "CAV", "read_priority": "skim"}
         else:
             ids = re.findall(r'<paper id="(\S+)">', user)
             data = {"summaries": [{"id": i, "tldr": "TLDR", "novel_idea": "NOVEL", "method": "METHOD",
@@ -117,6 +120,59 @@ def test_full_run_with_fake_api(monkeypatch=None):
     assert runmod.main() == 0
     os.environ.pop("GEMINI_API_KEY")
     sys.path.remove(str(tmp))
+    shutil.rmtree(tmp)
+
+
+
+
+def test_failed_summaries_are_retried_and_filled():
+    """Batch fails -> per-paper retry; a day left with missing summaries is filled by the next run."""
+    import io
+    import os
+    import urllib.error
+    import importlib
+    tmp = Path(tempfile.mkdtemp())
+    for f in ("run.py", "config.yaml"):
+        shutil.copy(ROOT / f, tmp / f)
+    shutil.copytree(ROOT / "digest", tmp / "digest")
+    shutil.copytree(ROOT / "docs" / "assets", tmp / "docs" / "assets")
+    sys.path.insert(0, str(tmp))
+    for m in [k for k in sys.modules if k == "run" or k.startswith("digest")]:
+        del sys.modules[m]
+    import run as runmod
+    calls = []
+    good = make_fake_gemini_req(calls)
+    state = {"mode": "down"}
+
+    def flaky(self, method, path, body=None, timeout=300):
+        if ":generateContent" in path and "tldr" in json.dumps(body.get("generationConfig", {})):
+            if state["mode"] == "down":
+                raise urllib.error.HTTPError(path, 503, "overloaded", {}, io.BytesIO(b'{"error":"overloaded"}'))
+            if state["mode"] == "batch-broken" and json.dumps(body).count("<paper id=") > 1:
+                return {"candidates": [{"content": {"parts": [{"text": '{"summaries": [{"id": "trunc'}]},
+                                        "finishReason": "MAX_TOKENS"}]}
+        return good(self, method, path, body, timeout)
+
+    runmod.llm.GeminiBackend._req = flaky
+    runmod.llm.time.sleep = lambda s: None
+    runmod.arxiv_feed.fetch_fulltext = lambda pid, budget=0: ("FULL TEXT", "fulltext-html")
+    os.environ["GEMINI_API_KEY"] = "test"
+    sys.argv = ["run.py", "--feed-file", str(FX / "feed_2026-10-14.xml"), "--no-email"]
+    assert runmod.main() == 0
+    rec = json.loads((tmp / "docs/data/2026-10-14.json").read_text())
+    assert rec["counts"]["detailed"] == 0                     # every model down -> no summaries
+    assert "Summaries failed" in (tmp / "docs/index.html").read_text()
+    state["mode"] = "batch-broken"                            # later run: batches truncate, singles work
+    assert runmod.main() == 0
+    rec = json.loads((tmp / "docs/data/2026-10-14.json").read_text())
+    assert rec["counts"]["detailed"] == 3, rec["counts"]
+    assert "NOVEL" in (tmp / "docs/index.html").read_text()
+    n = len(calls)
+    assert runmod.main() == 0 and len(calls) == n             # complete day -> no API calls
+    os.environ.pop("GEMINI_API_KEY")
+    sys.path.remove(str(tmp))
+    for m in [k for k in sys.modules if k == "run" or k.startswith("digest")]:
+        del sys.modules[m]
     shutil.rmtree(tmp)
 
 

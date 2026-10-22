@@ -140,9 +140,10 @@ class GeminiBackend:
             "contents": [{"role": "user", "parts": [{"text": user}]}],
             "generationConfig": {"responseMimeType": "application/json",
                                  "responseJsonSchema": tool["input_schema"],     # standard JSON Schema
-                                 "maxOutputTokens": max(max_tokens, 16384), "temperature": 0.3},
+                                 "maxOutputTokens": max(max_tokens, 32768), "temperature": 0.3},
         }
         legacy_schema = False
+        d = None
         for attempt in range(5):
             wait = self.min_gap - (time.time() - self._last)
             if wait > 0:
@@ -169,20 +170,30 @@ class GeminiBackend:
                     legacy_schema = True
                     continue
                 if e.code in (500, 502, 503, 504):
-                    time.sleep(15 * (attempt + 1))
+                    if attempt >= 2:
+                        break          # persistently overloaded: give up on this model for today
+                    time.sleep(20 * (attempt + 1))
                     continue
                 if e.code in (403, 404):
                     self.dead.add(model)
                 raise RuntimeError(f"Gemini HTTP {e.code} for {model}: {msg[:400]}")
         else:
+            d = None
+        if d is None:
+            self.dead.add(model)   # skip this model for the rest of the run
             raise RuntimeError(f"Gemini: gave up after retries ({model})")
         cand = (d.get("candidates") or [{}])[0]
         text = "".join(p.get("text", "") for p in cand.get("content", {}).get("parts", []) if not p.get("thought"))
         if not text:
-            raise RuntimeError(f"Gemini returned no text (finishReason={cand.get('finishReason')})")
+            raise RuntimeError(f"Gemini returned no text (finishReason={cand.get('finishReason')}, "
+                               f"block={d.get('promptFeedback', {}).get('blockReason')})")
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
         um = d.get("usageMetadata", {})
-        return json.loads(text), (um.get("promptTokenCount", 0),
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"bad JSON from {model} (finishReason={cand.get('finishReason')}): {e}")
+        return parsed, (um.get("promptTokenCount", 0),
                                   um.get("candidatesTokenCount", 0) + um.get("thoughtsTokenCount", 0))
 
 
@@ -204,20 +215,24 @@ class Caller:
         self.b, self.cands, self.used = backend, list(candidates), None
 
     def __call__(self, system, user, tool, max_tokens):
+        """Try each candidate model in turn. Any failure (quota, overload, timeout, bad or
+        truncated JSON) moves on to the next model; models out of quota are dropped for the
+        rest of the run."""
         last = None
         for m in list(self.cands):
             try:
                 out = self.b.call(m, system, user, tool, max_tokens)
                 self.used = m
                 return out
-            except (QuotaExhausted, RuntimeError) as e:
+            except Exception as e:  # noqa: BLE001
                 last = e
-                log(f"[llm] {m} failed: {str(e)[:200]}")
+                log(f"[llm] {m} failed: {type(e).__name__}: {str(e)[:300]}")
                 if isinstance(e, QuotaExhausted) or m in getattr(self.b, "dead", set()):
-                    self.cands.remove(m)
-                    continue
-                raise
-        raise QuotaExhausted(f"no usable model left: {last}")
+                    if m in self.cands:
+                        self.cands.remove(m)
+        if not self.cands:
+            raise QuotaExhausted(f"no usable model left: {last}")
+        raise RuntimeError(f"all models failed for this request: {last}")
 
 
 def _system(cfg: dict) -> str:
@@ -307,13 +322,44 @@ def keyword_score(p: Paper, cfg: dict) -> float:
     return min(10.0, score)
 
 
+def _norm(name: str) -> list[str]:
+    import unicodedata
+    n = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
+    return re.findall(r"[a-z]+(?:-[a-z]+)*", n)
+
+
+def author_matches(entry: str, author: str) -> bool:
+    """'Machado' matches any author surnamed Machado; 'Pedro Machado' also matches
+    'Pedro A. N. Machado' and 'P. Machado' (first name or initial + surname). Accents ignored;
+    multi-word surnames like 'De Vries' or 'de Gouvea' work."""
+    e, a = _norm(entry), _norm(author)
+    if not e or not a:
+        return False
+    if len(e) == 1:                                   # surname only
+        return e[0] == a[-1] or (len(a) > 1 and e[0] == "-".join(a[-2:]))
+    # try the entry's last 1-2 words as the surname
+    for k in (2, 1):
+        if len(e) <= k - 1:
+            continue
+        sur, first = e[-k:], e[:-k]
+        if a[-k:] == sur:
+            if not first:
+                return True
+            given = a[:-k]
+            if given and (given[0] == first[0] or (len(given[0]) == 1 and given[0] == first[0][0])):
+                return True
+    return False
+
+
 def apply_boosts(papers: list[Paper], cfg: dict) -> None:
-    fav = [a.lower() for a in cfg.get("favorite_authors", [])]
+    fav = [str(a).strip() for a in (cfg.get("favorite_authors") or []) if a and str(a).strip()]
+    boost = cfg.get("favorite_author_boost", 1.5)
     for p in papers:
-        names = " | ".join(p.authors).lower()
-        if any(re.search(r"\b" + re.escape(f) + r"\b", names) for f in fav):
-            p.score = min(10.0, p.score + cfg.get("favorite_author_boost", 1.5))
+        hit = next((f for f in fav for au in p.authors if author_matches(f, au)), None)
+        if hit:
+            p.score = min(10.0, p.score + boost)
             p.topic = p.topic or "favorite author"
+            p.reason = (p.reason + f" [favorite author: {hit}]").strip()
 
 
 # ---------------------------------------------------------------- summaries

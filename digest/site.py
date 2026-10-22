@@ -113,6 +113,12 @@ def day_page(rec: dict, cfg: dict, prev_d: str | None, next_d: str | None, depth
          (f'<a href="{up}days/{next_d}.html">{e(_fmt_date(next_d))} →</a>' if next_d else "<span></span>")
     gen = dt.datetime.fromisoformat(rec["generated_at"]).astimezone(
         ZoneInfo(cfg.get("timezone", "America/New_York"))).strftime("%a %H:%M") if rec.get("generated_at") else ""
+    smin = cfg.get("summaries", {}).get("min_score", 6)
+    empty_msg = ('<p class="warn">Summaries failed today (the AI service was busy or out of quota). '
+                 'The next scheduled run fills them in automatically; the ranked papers are listed below.</p>'
+                 if any(p["score"] >= smin for p in papers) and not rec.get("dry_run")
+                 else '<p class="muted">Nothing above the summary threshold today.</p>')
+    missing = sum(1 for p in papers if p["score"] >= smin and not p.get("summary"))
     banner = '<p class="warn">Preview generated without the API (keyword ranking, abstract snippets).</p>' if rec.get("dry_run") else ""
     return head(f"arXiv · {_fmt_date(rec['date'])}", depth) + nav(cfg, depth, active) + f"""
 <main>
@@ -124,7 +130,7 @@ def day_page(rec: dict, cfg: dict, prev_d: str | None, next_d: str | None, depth
   <div class="pn">{pn}</div>
 </section>
 <h2 class="sec">Top picks</h2>
-{''.join(card(p) for p in detailed) or '<p class="muted">Nothing above the summary threshold today.</p>'}
+{''.join(card(p) for p in detailed) or empty_msg}
 <h2 class="sec">Also relevant <span class="n">{len(also)}</span></h2>
 <ul class="rows">{''.join(row(p) for p in also)}</ul>
 <details class="rest"><summary>Everything else <span class="n">{len(rest)}</span></summary>
