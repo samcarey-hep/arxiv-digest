@@ -46,6 +46,12 @@ interests: |
   - Nucleon axial and vector form factors, z-expansion, lattice QCD inputs to neutrino physics.
 
   HIGH:
+  - Effective field theories for low-energy precision physics: SMEFT/LEFT matching and running,
+    neutrino non-standard interactions, nuclear and chiral EFT for electroweak processes,
+    beta decay, CKM unitarity and radiative corrections.
+  - Precision atomic and nuclear probes of new physics: isotope shifts and King-plot
+    non-linearity, the thorium-229 nuclear clock, atomic clocks, variation of fundamental
+    constants, ultralight scalar dark matter and new long-range forces.
   - BSM physics at neutrino experiments: neutrino tridents, upscattering, dipole portals, heavy
     neutral leptons, dark photons/scalars, light mediators; DUNE ND, SBN (SBND, MicroBooNE,
     ICARUS), MiniBooNE/LSND anomalies, FASER/FASERnu/FPF, SHiP, muon-collider neutrinos.
@@ -55,25 +61,111 @@ interests: |
   - Quantum entanglement, spin correlations and quantum tomography in scattering final states.
 
   MEDIUM:
-  - Precision atomic physics probes of new physics (isotope shifts, King plot non-linearity).
+  - Flavour physics with a low-energy or EFT angle (rare decays, lepton flavour violation,
+    B/K/charm anomalies) when the idea is novel.
   - Nuclear structure relevant to the above (argon, carbon, oxygen), short-range correlations.
   - ML/AI and LLM agents for theoretical or phenomenological physics workflows.
   - General neutrino phenomenology (mass models, oscillations, cosmology) only when the idea is
     novel or the result is strong.
 
-  LOW: string theory, holography, formal QFT, flavour model-building and collider BSM without a
-  neutrino-interaction angle.
+  LOW: string theory, holography, formal QFT, gravitational waves, heavy-ion/QGP physics,
+  hadron spectroscopy, and collider BSM or flavour model-building without a low-energy,
+  neutrino or precision angle.
 
 favorite_authors:                # papers by these people get a boost
+  # --- your list ---
   - Isaacson
-  - Pandey
-  - Benhar
+  - Menzo
+  - Zupan
+  - Gilad Perez
+  - Alexey Petrov
+  - Manohar
+  - Abhishek Banerjee
+  - Pedro Machado
+  - Hostert
+  - Garv Chauhan
+  - Bhubanjyoti Bhattacharya
+  - Harnik
+  - Nachman
+  - Matchev
+  - Cirigliano
+  - Jordy de Vries
+  - Stefan Hoeche
+  - Mrenna
+  - Adrian Thompson
+  - Bhaskar Dutta
+  - K. S. Babu
+  - Vishvas Pandey
+  - Omar Benhar
   - Tammaro
   - Borrello
   - Gil Paz
   - Lovato
   - Rocco
   - Gardiner
+  # --- neutrino-nucleus theory & generators ---
+  - Ulrich Mosel
+  - Jan Sobczyk
+  - Kajetan Niewczas
+  - Luis Alvarez-Ruso
+  - Juan Nieves
+  - Raul Gonzalez-Jimenez
+  - Natalie Jachowicz
+  - Maria Barbaro
+  - Artur Ankowski
+  - Saori Pastore
+  - Rocco Schiavilla
+  - Costas Andreopoulos
+  - Steven Dytman
+  # --- nucleon form factors / precision theory ---
+  - Richard Hill
+  - Oleksandr Tomalak
+  - Ryan Plestid
+  - Aaron Meyer
+  - Andreas Kronfeld
+  # --- electron scattering for neutrinos ---
+  - Or Hen
+  - Adi Ashkenazi
+  - Afroditi Papadopoulou
+  - Lawrence Weinstein
+  # --- CEvNS & low-energy neutrinos ---
+  - Kate Scholberg
+  - Louis Strigari
+  - Ian Shoemaker
+  - Pilar Coloma
+  - Dimitrios Papoulias
+  # --- BSM at neutrino experiments ---
+  - Kevin Kelly
+  - Andre de Gouvea
+  - Joachim Kopp
+  - Brian Batell
+  - Felix Kling
+  - Vedran Brdar
+  - Gordan Krnjaic
+  - Yu-Dai Tsai
+  - Wolfgang Altmannshofer
+  # --- EFT & flavour ---
+  - Emanuele Mereghetti
+  - Wouter Dekens
+  - Martin Gonzalez-Alonso
+  # --- event generators / QCD ---
+  - Frank Krauss
+  - Peter Skands
+  - Torbjorn Sjostrand
+  - Enrico Bothmann
+  - Marek Schonherr
+  # --- ML for physics ---
+  - Jesse Thaler
+  - Tilman Plehn
+  - Kyle Cranmer
+  # --- isotope shifts / King plots ---
+  - Julian Berengut
+  - Elina Fuchs
+  - Yotam Soreq
+  # --- entanglement in collisions ---
+  - Alan Barr
+  - Tao Han
+  - Matthew Low
 favorite_author_boost: 1.5
 
 # Used only as a fallback when the API is unavailable (and in --dry-run).
@@ -98,11 +190,30 @@ keywords:
   trident: 4
   upscattering: 3
   heavy neutral lepton: 2
+  dark photon: 2
   quasielastic: 3
+  two-nucleon: 2
+  meson-exchange current: 3
+  pion production: 2
   axial form factor: 3
   z-expansion: 3
   spectral function: 2
   final-state interaction: 2
+  intranuclear cascade: 3
+  nuclear de-excitation: 4
+  electron scattering: 2
+  effective field theory: 3
+  smeft: 3
+  non-standard interaction: 3
+  beta decay: 2
+  isotope shift: 3
+  king plot: 4
+  nuclear clock: 4
+  thorium-229: 4
+  ultralight: 2
+  fifth force: 2
+  entanglement: 2
+  quantum tomography: 3
+  parton shower: 2
   cross section: 1
   neutrino: 1
-  entanglement: 1
