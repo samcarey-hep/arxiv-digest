@@ -4,7 +4,7 @@
  "dry_run": false,
  "models": {
   "rank": "keywords",
-  "summary": "none"
+  "summary": "gemini-3.8-flash"
  },
  "usage": {
   "rank": {
@@ -12,14 +12,14 @@
    "output": 0
   },
   "summary": {
-   "input": 0,
-   "output": 0
+   "input": 11386,
+   "output": 1577
   }
  },
  "counts": {
   "total": 112,
   "relevant": 2,
-  "detailed": 0
+  "detailed": 1
  },
  "papers": [
   {
@@ -41,7 +41,21 @@
    "score": 6.0,
    "topic": "",
    "reason": "(keyword-ranked)",
-   "summary": {},
+   "summary": {
+    "tldr": "Nuclear deep-inelastic scattering provides an isospin-dependent lever arm to probe semileptonic SMEFT operators, with flavor-isovector combinations proving remarkably robust against nuclear PDF uncertainties.",
+    "novel_idea": "The authors systematically evaluate charged-lepton nuclear DIS (nDIS) across targets from $^{12}\\text{C}$ to $^{208}\\text{Pb}$ as an independent probe of semileptonic dimension-6 SMEFT operators. They demonstrate that the target's neutron excess reshuffles quark luminosities at large $x$, creating an isospin/flavor lever arm that can break degeneracies present in free-nucleon DIS and High-Luminosity LHC Drell-Yan data.",
+    "method": "The authors compute leading-order neutral-current DIS structure function shifts $\\Delta F_{2,A}/F_{2,A}^{\\text{SM}}$ from four-fermion operators $(\\bar{e}\\gamma^\\mu e)(\\bar{q}\\gamma_\\mu q)$ using five global nPDF analyses (nCTEQ15, nCTEQ26, EPPS21, nNNPDF2.0, and TUJU19). They examine four benchmarks ($d$-philic, isoscalar, isovector, and extended 2nd generation) at high virtualities ($Q^2 = 10^3\\text{--}10^5\\text{ GeV}^2$), define a target ratio lever arm $R^{\\text{Pb/C-12}}$, assess scale/scheme/higher-twist/EFT-truncation uncertainties, and match onto tree-level UV completions (scalar/vector leptoquarks and color-singlet vectors).",
+    "key_results": [
+     "Isovector SMEFT couplings ($C_{eu}=+1, C_{ed}=-1$) add constructively, yielding large structure function shifts ($\\sim 4\\text{--}9\\%$ in $^{208}\\text{Pb}$ at $Q^2=10^4\\text{ GeV}^2$) that are highly stable across all five nPDF sets (agreeing within $\\sim 5\\%$).",
+     "Same-sign (isoscalar) operators undergo severe $u\\text{--}d$ cancellation, making the residual shift hypersensitive to the nuclear $d/u$ ratio, with nPDF uncertainty bands reaching $\\sim 80\\%$ at $x = 0.7$.",
+     "The nuclear lever arm $R^{\\text{Pb/C-12}}$ is independent of the Wilson coefficient magnitude and $\\Lambda$ at linear order, providing a pure diagnostic of quark-flavor chiral structure.",
+     "Projected reach $\\Lambda_0$ where the SMEFT signal exceeds baseline nPDF uncertainties is $0.3\\text{--}0.8\\text{ TeV}$ at EIC kinematics ($Q^2=10^3\\text{ GeV}^2$), $0.9\\text{--}2.4\\text{ TeV}$ at LHeC ($10^4\\text{ GeV}^2$), and $2.6\\text{--}7.2\\text{ TeV}$ at FCC-eh ($10^5\\text{ GeV}^2$).",
+     "Scalar leptoquarks can only generate positive $C_{eu}, C_{ed}$, whereas realizing the robust isovector scenario strictly requires a spin-1 mediator (vector leptoquark or color-singlet $Z'$)."
+    ],
+    "why_it_matters": "While primarily focused on charged-lepton colliders (EIC, LHeC), this work directly informs the interplay between nuclear PDFs and electroweak precision EFT fits. The demonstrated crosstalk between target isospin ($N-Z$), nuclear modifications, and semileptonic contact operators is methodologically relevant to high-energy neutrino-nucleus DIS (e.g., FASER$\\nu$, SND@LHC, and neutrino factory setups) where similar $d/u$ and nPDF degeneracies affect BSM extraction.",
+    "caveats": "The analysis is conducted at leading-order in QCD and EW couplings without QED radiation or operator RGE running. In addition, dimension-6 squared terms induce significant shifts ($30\\text{--}90\\%$) for the same-sign scenario at $\\Lambda = 1\\text{ TeV}$ due to linear cancellations.",
+    "read_priority": "worth reading"
+   },
    "summary_source": "fulltext-html"
   },
   {
